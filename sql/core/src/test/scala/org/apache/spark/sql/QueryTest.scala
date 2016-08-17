@@ -292,7 +292,7 @@ abstract class QueryTest extends PlanTest {
         p.expressions.foreach {
           _.foreach {
             case s: SubqueryExpression =>
-              s.query.foreach(collectData)
+              s.plan.foreach(collectData)
             case _ =>
           }
         }
@@ -334,7 +334,7 @@ abstract class QueryTest extends PlanTest {
       case p =>
         p.transformExpressions {
           case s: SubqueryExpression =>
-            s.withNewPlan(s.query.transformDown(renormalize))
+            s.withNewPlan(s.plan.transformDown(renormalize))
         }
     }
     val normalized2 = jsonBackPlan.transformDown(renormalize)
@@ -401,6 +401,9 @@ object QueryTest {
     sameRows(expectedAnswer, sparkAnswer, isSorted).map { results =>
         s"""
         |Results do not match for query:
+        |Timezone: ${TimeZone.getDefault}
+        |Timezone Env: ${sys.env.getOrElse("TZ", "")}
+        |
         |${df.queryExecution}
         |== Results ==
         |$results
@@ -477,6 +480,14 @@ object QueryTest {
     checkAnswer(df, expectedAnswer.asScala) match {
       case Some(errorMessage) => errorMessage
       case None => null
+    }
+  }
+}
+
+class QueryTestSuite extends QueryTest with test.SharedSQLContext {
+  test("SPARK-16940: checkAnswer should raise TestFailedException for wrong results") {
+    intercept[org.scalatest.exceptions.TestFailedException] {
+      checkAnswer(sql("SELECT 1"), Row(2) :: Nil)
     }
   }
 }

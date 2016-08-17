@@ -53,6 +53,13 @@ setClass("AFTSurvivalRegressionModel", representation(jobj = "jobj"))
 #' @note KMeansModel since 2.0.0
 setClass("KMeansModel", representation(jobj = "jobj"))
 
+#' S4 class that represents an IsotonicRegressionModel
+#'
+#' @param jobj a Java object reference to the backing Scala IsotonicRegressionModel
+#' @export
+#' @note IsotonicRegressionModel since 2.1.0
+setClass("IsotonicRegressionModel", representation(jobj = "jobj"))
+
 #' Saves the MLlib model to the input path
 #'
 #' Saves the MLlib model to the input path. For more information, see the specific
@@ -62,6 +69,7 @@ setClass("KMeansModel", representation(jobj = "jobj"))
 #' @export
 #' @seealso \link{spark.glm}, \link{glm}
 #' @seealso \link{spark.kmeans}, \link{spark.naiveBayes}, \link{spark.survreg}
+#' @seealso \link{spark.isoreg}
 #' @seealso \link{read.ml}
 NULL
 
@@ -74,6 +82,7 @@ NULL
 #' @export
 #' @seealso \link{spark.glm}, \link{glm}
 #' @seealso \link{spark.kmeans}, \link{spark.naiveBayes}, \link{spark.survreg}
+#' @seealso \link{spark.isoreg}
 NULL
 
 #' Generalized Linear Models
@@ -91,6 +100,8 @@ NULL
 #'               \url{https://stat.ethz.ch/R-manual/R-devel/library/stats/html/family.html}.
 #' @param tol Positive convergence tolerance of iterations.
 #' @param maxIter Integer giving the maximal number of IRLS iterations.
+#' @param weightCol The weight column name. If this is not set or NULL, we treat all instance
+#'                  weights as 1.0.
 #' @aliases spark.glm,SparkDataFrame,formula-method
 #' @return \code{spark.glm} returns a fitted generalized linear model
 #' @rdname spark.glm
@@ -119,7 +130,7 @@ NULL
 #' @note spark.glm since 2.0.0
 #' @seealso \link{glm}, \link{read.ml}
 setMethod("spark.glm", signature(data = "SparkDataFrame", formula = "formula"),
-          function(data, formula, family = gaussian, tol = 1e-6, maxIter = 25) {
+          function(data, formula, family = gaussian, tol = 1e-6, maxIter = 25, weightCol = NULL) {
             if (is.character(family)) {
               family <- get(family, mode = "function", envir = parent.frame())
             }
@@ -132,10 +143,13 @@ setMethod("spark.glm", signature(data = "SparkDataFrame", formula = "formula"),
             }
 
             formula <- paste(deparse(formula), collapse = "")
+            if (is.null(weightCol)) {
+              weightCol <- ""
+            }
 
             jobj <- callJStatic("org.apache.spark.ml.r.GeneralizedLinearRegressionWrapper",
                                 "fit", formula, data@sdf, family$family, family$link,
-                                tol, as.integer(maxIter))
+                                tol, as.integer(maxIter), as.character(weightCol))
             return(new("GeneralizedLinearRegressionModel", jobj = jobj))
           })
 
@@ -151,6 +165,8 @@ setMethod("spark.glm", signature(data = "SparkDataFrame", formula = "formula"),
 #'               \url{https://stat.ethz.ch/R-manual/R-devel/library/stats/html/family.html}.
 #' @param epsilon Positive convergence tolerance of iterations.
 #' @param maxit Integer giving the maximal number of IRLS iterations.
+#' @param weightCol The weight column name. If this is not set or NULL, we treat all instance
+#'                  weights as 1.0.
 #' @return \code{glm} returns a fitted generalized linear model.
 #' @rdname glm
 #' @export
@@ -165,8 +181,8 @@ setMethod("spark.glm", signature(data = "SparkDataFrame", formula = "formula"),
 #' @note glm since 1.5.0
 #' @seealso \link{spark.glm}
 setMethod("glm", signature(formula = "formula", family = "ANY", data = "SparkDataFrame"),
-          function(formula, family = gaussian, data, epsilon = 1e-6, maxit = 25) {
-            spark.glm(data, formula, family, tol = epsilon, maxIter = maxit)
+          function(formula, family = gaussian, data, epsilon = 1e-6, maxit = 25, weightCol = NULL) {
+            spark.glm(data, formula, family, tol = epsilon, maxIter = maxit, weightCol = weightCol)
           })
 
 #  Returns the summary of a model produced by glm() or spark.glm(), similarly to R's summary().
@@ -290,6 +306,94 @@ setMethod("summary", signature(object = "NaiveBayesModel"),
             rownames(tables) <- unlist(labels)
             colnames(tables) <- unlist(features)
             return(list(apriori = apriori, tables = tables))
+          })
+
+#' Isotonic Regression Model
+#'
+#' Fits an Isotonic Regression model against a Spark DataFrame, similarly to R's isoreg().
+#' Users can print, make predictions on the produced model and save the model to the input path.
+#'
+#' @param data SparkDataFrame for training
+#' @param formula A symbolic description of the model to be fitted. Currently only a few formula
+#'                operators are supported, including '~', '.', ':', '+', and '-'.
+#' @param isotonic Whether the output sequence should be isotonic/increasing (TRUE) or
+#'                 antitonic/decreasing (FALSE)
+#' @param featureIndex The index of the feature if \code{featuresCol} is a vector column (default: `0`),
+#'                     no effect otherwise
+#' @param weightCol The weight column name.
+#' @return \code{spark.isoreg} returns a fitted Isotonic Regression model
+#' @rdname spark.isoreg
+#' @aliases spark.isoreg,SparkDataFrame,formula-method
+#' @name spark.isoreg
+#' @export
+#' @examples
+#' \dontrun{
+#' sparkR.session()
+#' data <- list(list(7.0, 0.0), list(5.0, 1.0), list(3.0, 2.0),
+#'         list(5.0, 3.0), list(1.0, 4.0))
+#' df <- createDataFrame(data, c("label", "feature"))
+#' model <- spark.isoreg(df, label ~ feature, isotonic = FALSE)
+#' # return model boundaries and prediction as lists
+#' result <- summary(model, df)
+#' # prediction based on fitted model
+#' predict_data <- list(list(-2.0), list(-1.0), list(0.5),
+#'                 list(0.75), list(1.0), list(2.0), list(9.0))
+#' predict_df <- createDataFrame(predict_data, c("feature"))
+#' # get prediction column
+#' predict_result <- collect(select(predict(model, predict_df), "prediction"))
+#'
+#' # save fitted model to input path
+#' path <- "path/to/model"
+#' write.ml(model, path)
+#'
+#' # can also read back the saved model and print
+#' savedModel <- read.ml(path)
+#' summary(savedModel)
+#' }
+#' @note spark.isoreg since 2.1.0
+setMethod("spark.isoreg", signature(data = "SparkDataFrame", formula = "formula"),
+          function(data, formula, isotonic = TRUE, featureIndex = 0, weightCol = NULL) {
+            formula <- paste0(deparse(formula), collapse = "")
+
+            if (is.null(weightCol)) {
+              weightCol <- ""
+            }
+
+            jobj <- callJStatic("org.apache.spark.ml.r.IsotonicRegressionWrapper", "fit",
+            data@sdf, formula, as.logical(isotonic), as.integer(featureIndex),
+              as.character(weightCol))
+            return(new("IsotonicRegressionModel", jobj = jobj))
+          })
+
+#  Predicted values based on an isotonicRegression model
+
+#' @param object a fitted IsotonicRegressionModel
+#' @param newData SparkDataFrame for testing
+#' @return \code{predict} returns a SparkDataFrame containing predicted values
+#' @rdname spark.isoreg
+#' @aliases predict,IsotonicRegressionModel,SparkDataFrame-method
+#' @export
+#' @note predict(IsotonicRegressionModel) since 2.1.0
+setMethod("predict", signature(object = "IsotonicRegressionModel"),
+          function(object, newData) {
+            return(dataFrame(callJMethod(object@jobj, "transform", newData@sdf)))
+          })
+
+#  Get the summary of an IsotonicRegressionModel model
+
+#' @param object a fitted IsotonicRegressionModel
+#' @param ... Other optional arguments to summary of an IsotonicRegressionModel
+#' @return \code{summary} returns the model's boundaries and prediction as lists
+#' @rdname spark.isoreg
+#' @aliases summary,IsotonicRegressionModel-method
+#' @export
+#' @note summary(IsotonicRegressionModel) since 2.1.0
+setMethod("summary", signature(object = "IsotonicRegressionModel"),
+          function(object, ...) {
+            jobj <- object@jobj
+            boundaries <- callJMethod(jobj, "boundaries")
+            predictions <- callJMethod(jobj, "predictions")
+            return(list(boundaries = boundaries, predictions = predictions))
           })
 
 #' K-Means Clustering Model
@@ -526,6 +630,25 @@ setMethod("write.ml", signature(object = "KMeansModel", path = "character"),
             invisible(callJMethod(writer, "save", path))
           })
 
+#  Save fitted IsotonicRegressionModel to the input path
+
+#' @param path The directory where the model is saved
+#' @param overwrite Overwrites or not if the output path already exists. Default is FALSE
+#'                  which means throw exception if the output path exists.
+#'
+#' @rdname spark.isoreg
+#' @aliases write.ml,IsotonicRegressionModel,character-method
+#' @export
+#' @note write.ml(IsotonicRegression, character) since 2.1.0
+setMethod("write.ml", signature(object = "IsotonicRegressionModel", path = "character"),
+          function(object, path, overwrite = FALSE) {
+            writer <- callJMethod(object@jobj, "write")
+            if (overwrite) {
+              writer <- callJMethod(writer, "overwrite")
+            }
+           invisible(callJMethod(writer, "save", path))
+          })
+
 #' Load a fitted MLlib model from the input path.
 #'
 #' @param path Path of the model to read.
@@ -551,6 +674,8 @@ read.ml <- function(path) {
       return(new("GeneralizedLinearRegressionModel", jobj = jobj))
   } else if (isInstanceOf(jobj, "org.apache.spark.ml.r.KMeansWrapper")) {
       return(new("KMeansModel", jobj = jobj))
+  } else if (isInstanceOf(jobj, "org.apache.spark.ml.r.IsotonicRegressionWrapper")) {
+      return(new("IsotonicRegressionModel", jobj = jobj))
   } else {
     stop(paste("Unsupported model: ", jobj))
   }

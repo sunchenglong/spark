@@ -118,6 +118,28 @@ test_that("spark.glm summary", {
   expect_equal(stats$df.residual, rStats$df.residual)
   expect_equal(stats$aic, rStats$aic)
 
+  # Test spark.glm works with weighted dataset
+  a1 <- c(0, 1, 2, 3)
+  a2 <- c(5, 2, 1, 3)
+  w <- c(1, 2, 3, 4)
+  b <- c(1, 0, 1, 0)
+  data <- as.data.frame(cbind(a1, a2, w, b))
+  df <- suppressWarnings(createDataFrame(data))
+
+  stats <- summary(spark.glm(df, b ~ a1 + a2, family = "binomial", weightCol = "w"))
+  rStats <- summary(glm(b ~ a1 + a2, family = "binomial", data = data, weights = w))
+
+  coefs <- unlist(stats$coefficients)
+  rCoefs <- unlist(rStats$coefficients)
+  expect_true(all(abs(rCoefs - coefs) < 1e-3))
+  expect_true(all(rownames(stats$coefficients) == c("(Intercept)", "a1", "a2")))
+  expect_equal(stats$dispersion, rStats$dispersion)
+  expect_equal(stats$null.deviance, rStats$null.deviance)
+  expect_equal(stats$deviance, rStats$deviance)
+  expect_equal(stats$df.null, rStats$df.null)
+  expect_equal(stats$df.residual, rStats$df.residual)
+  expect_equal(stats$aic, rStats$aic)
+
   # Test summary works on base GLM models
   baseModel <- stats::glm(Sepal.Width ~ Sepal.Length + Species, data = iris)
   baseSummary <- summary(baseModel)
@@ -452,6 +474,38 @@ test_that("spark.survreg", {
       NA)
     expect_equal(predict(model, rData)[[1]], 3.724591, tolerance = 1e-4)
   }
+})
+
+test_that("spark.isotonicRegression", {
+  label <- c(7.0, 5.0, 3.0, 5.0, 1.0)
+  feature <- c(0.0, 1.0, 2.0, 3.0, 4.0)
+  weight <- c(1.0, 1.0, 1.0, 1.0, 1.0)
+  data <- as.data.frame(cbind(label, feature, weight))
+  df <- suppressWarnings(createDataFrame(data))
+
+  model <- spark.isoreg(df, label ~ feature, isotonic = FALSE,
+                        weightCol = "weight")
+  # only allow one variable on the right hand side of the formula
+  expect_error(model2 <- spark.isoreg(df, ~., isotonic = FALSE))
+  result <- summary(model, df)
+  expect_equal(result$predictions, list(7, 5, 4, 4, 1))
+
+  # Test model prediction
+  predict_data <- list(list(-2.0), list(-1.0), list(0.5),
+                       list(0.75), list(1.0), list(2.0), list(9.0))
+  predict_df <- createDataFrame(predict_data, c("feature"))
+  predict_result <- collect(select(predict(model, predict_df), "prediction"))
+  expect_equal(predict_result$prediction, c(7.0, 7.0, 6.0, 5.5, 5.0, 4.0, 1.0))
+
+  # Test model save/load
+  modelPath <- tempfile(pattern = "spark-isotonicRegression", fileext = ".tmp")
+  write.ml(model, modelPath)
+  expect_error(write.ml(model, modelPath))
+  write.ml(model, modelPath, overwrite = TRUE)
+  model2 <- read.ml(modelPath)
+  expect_equal(result, summary(model2, df))
+
+  unlink(modelPath)
 })
 
 sparkR.session.stop()
